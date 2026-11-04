@@ -102,6 +102,7 @@ pub(super) fn tab_sidebar(panel: &Panel) -> Element<'_, Message> {
             panel.active_tab == Tab::Characters
         ),
         tab_button("Hotkeys", Tab::Hotkeys, panel.active_tab == Tab::Hotkeys),
+        tab_button("Alerts", Tab::Alerts, panel.active_tab == Tab::Alerts),
     ]
     .spacing(4);
 
@@ -150,6 +151,7 @@ pub(super) fn tab_content(panel: &Panel) -> Element<'_, Message> {
             .into(),
         Tab::Characters => characters_section(panel),
         Tab::Hotkeys => hotkeys_section(panel),
+        Tab::Alerts => alerts_section(panel),
     };
     container(inner)
         .padding([12, 16])
@@ -439,6 +441,61 @@ fn hotkeys_section(panel: &Panel) -> Element<'_, Message> {
     ]
     .spacing(8)
     .into()
+}
+
+fn alerts_section(panel: &Panel) -> Element<'_, Message> {
+    use crate::eve_logs::alerts::AlertKind;
+
+    let alerts = &panel.config.alerts;
+    let mut col = column![
+        section_header("EVE Log Alerts"),
+        checkbox(alerts.enabled)
+            .label("Watch EVE gamelogs for alerts")
+            .on_toggle(Message::AlertsEnabledToggled),
+        checkbox(alerts.flash)
+            .label("Flash the alert color")
+            .on_toggle(Message::AlertFlashToggled),
+        caption(
+            "A client's preview turns red (danger), amber (needs action) or blue (info) with \
+             the reason in its title bar. Switching to that client clears it."
+        ),
+        section_header("Events"),
+    ]
+    .spacing(8);
+
+    for kind in AlertKind::ALL {
+        col = col.push(
+            checkbox(alerts.kind_enabled(kind))
+                .label(kind.description())
+                .on_toggle_maybe(
+                    alerts
+                        .enabled
+                        .then_some(move |v| Message::AlertKindToggled(kind, v)),
+                ),
+        );
+    }
+
+    let detected: String = if panel.detected_log_dirs.is_empty() {
+        "Auto-detect: no EVE Gamelogs folder found.".to_string()
+    } else {
+        format!("Auto-detected: {}", panel.detected_log_dirs.join(", "))
+    };
+
+    col = col
+        .push(section_header("Log Folder"))
+        .push(
+            text_input("Auto-detect", &panel.logs_dir_buffer)
+                .on_input(Message::AlertLogsDirChanged)
+                .width(Length::Fill),
+        )
+        .push(text(detected).size(CAPTION_SIZE).color(NICOTINE_BLACK))
+        .push(caption(
+            "Leave empty to auto-detect. Otherwise point at EVE's \"logs\" folder (the one \
+             containing Gamelogs). Alerts need the EVE client's gamelog setting enabled \
+             (it is by default).",
+        ));
+
+    col.into()
 }
 
 fn previews_section(panel: &Panel) -> Element<'_, Message> {

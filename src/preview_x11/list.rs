@@ -402,6 +402,24 @@ impl PreviewManager {
                 } else {
                     row.black_picture
                 };
+                // Pending EVE log alert: a colored marker in the row's
+                // left gutter, blinking with the flash setting.
+                if let Some(alert) = crate::eve_logs::alerts::get(name) {
+                    if crate::eve_logs::alerts::lit(&alert, std::time::Instant::now()) {
+                        let size = (LIST_ROW_FONT_PX as u16).min(LIST_ROW_LEFT_PAD as u16 - 4);
+                        conn.render_fill_rectangles(
+                            PictOp::SRC,
+                            list.dst_picture,
+                            xcolor(alert.kind.severity().rgb(), 0xffff),
+                            &[XRectangle {
+                                x: LIST_BORDER as i16 + 2,
+                                y: row_top + (row.text_h as i16 - size as i16).max(0) / 2,
+                                width: size,
+                                height: size,
+                            }],
+                        )?;
+                    }
+                }
                 let composite_w = row.text_w.min(max_text_w);
                 conn.render_composite(
                     PictOp::OVER,

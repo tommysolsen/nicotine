@@ -25,6 +25,7 @@ High-performance EVE Online multiboxing tool for Linux (X11 & Wayland) and Windo
 - **Drag-to-position with snap-to-dock** on previews and the list window; lockable layout for play
 - **Multi-compositor support** — X11, KDE Plasma (Wayland), Sway, Hyprland, GNOME (Wayland; auto-stack excepted)
 - **Minimize inactive clients** — optional, reduces resource usage when cycling away
+- **EVE log alerts** — tails gamelogs and flashes a client's preview on attacks, warp scrambles, decloaks, full mining hold, broken crystals, depleted rocks, fleet invites and convo requests
 
 ## Roadmap
 - Comprehensive documentation
@@ -178,12 +179,31 @@ sudo evtest /dev/input/eventX # Replace X with the correct event number i.e even
 
 ### Config Panel & Previews
 
-`nicotine start` opens the config panel and spawns one preview window per running EVE client. The panel has four sections: **Display Mode** (Previews vs List), **Cycle Order** (character list + per-character jump hotkeys), **Keyboard Hotkeys**, and **Preview Windows** (size sliders, show/hide toggle). Changes apply live; saves debounce to disk.
+`nicotine start` opens the config panel and spawns one preview window per running EVE client. The panel has five sections: **Display Mode** (Previews vs List), **Cycle Order** (character list + per-character jump hotkeys), **Keyboard Hotkeys**, **Preview Windows** (size sliders, show/hide toggle), and **Alerts** (EVE log alerts, see below). Changes apply live; saves debounce to disk.
 
 Previews and the list window:
 - **Left-click-drag** to reposition; edges snap to adjacent windows
 - **Click without drag** on a preview to foreground that EVE client
 - **Lock positions** in the panel to freeze the layout during play
+
+### EVE Log Alerts
+
+Nicotine tails the EVE gamelogs (`Documents/EVE/logs/Gamelogs`) and flags a client when something happens to it while you're looking at another one. The preview's title strip and border flash in the alert's colour with a short label; on Linux a frame is also drawn inside the thumbnail, and in List mode the row is marked. Focusing the client clears its alert.
+
+| Alert | Label | Colour |
+|-------|-------|--------|
+| Taking damage / being shot at | `ATTACKED` | red |
+| Warp scrambled, disrupted or in a bubble | `SCRAMBLED` | red |
+| Cloak dropped | `DECLOAKED` | red |
+| Mining hold full | `CARGO FULL` | orange |
+| Mining crystal destroyed | `CRYSTAL` | orange |
+| Fleet invite | `FLEET INVITE` | orange |
+| Conversation request | `CONVO` | orange |
+| Asteroid depleted / mining target lost | `ROCK GONE` | blue |
+
+A more severe alert replaces a lesser one, never the reverse. Only fresh lines raise alerts, so restarting Nicotine doesn't replay old events. Non-English clients are supported through a phrase table derived from [EVE-MultiPreview](https://github.com/CJKondur/EVE-MultiPreview) (MIT).
+
+Log folders are found automatically: on Windows under Documents (including OneDrive); on Linux inside Proton prefixes (`steamapps/compatdata/8500/pfx`) of every Steam library, Flatpak Steam, `~/.wine` and `~/Games/*`. The Alerts tab lists the folders it found; set `logs_dir` if yours isn't among them.
 
 ## Configuration
 
@@ -206,6 +226,23 @@ enable_mouse_buttons = true
 forward_button = 276       # Button 9
 backward_button = 275      # Button 8
 minimize_inactive = false  # Minimize clients when cycling away (saves resources)
+```
+
+EVE log alerts live under `[alerts]` (all optional; everything defaults to on):
+
+```toml
+[alerts]
+enabled = true
+flash = true               # false = steady colour instead of flashing
+# logs_dir = "~/Games/eve-online/drive_c/users/me/Documents/EVE/logs"
+attacked = true
+warp_scrambled = true
+decloaked = true
+cargo_full = true
+crystal_broken = true
+asteroid_depleted = true
+fleet_invite = true
+convo_request = true
 ```
 
 Per-character jump hotkeys live under `[character_hotkeys."Name"]` with `vk` and optional `modifier`; the config panel writes them for you.

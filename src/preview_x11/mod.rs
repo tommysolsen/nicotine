@@ -272,6 +272,7 @@ fn run_manager(
         list_window: None,
         needs_window_scan: true,
         last_window_scan: Instant::now(),
+        last_alert_token: (0, 0),
     };
     manager.run()
 }
@@ -355,6 +356,10 @@ struct PreviewManager {
     /// `WINDOW_SCAN_BACKSTOP` periodic re-scan that catches EVE clients
     /// whose title only becomes "EVE - <name>" after the user logs in.
     last_window_scan: Instant,
+    /// Last `eve_logs::alerts::paint_token` we repainted for. When it
+    /// changes (alert raised/cleared, or flash phase flipped) every
+    /// preview is marked dirty.
+    last_alert_token: (u64, u128),
 }
 
 impl PreviewManager {
@@ -387,6 +392,7 @@ impl PreviewManager {
                 last_reconcile = Instant::now();
             }
 
+            self.refresh_alert_chrome();
             if let Err(e) = self.repaint_thumbnails() {
                 eprintln!("Preview repaint error: {}", e);
             }
@@ -914,6 +920,8 @@ impl PreviewManager {
         }
         self.active_id = new_active;
         self.active_character = new_active_character;
+        // Focusing a client acknowledges its pending log alert.
+        crate::eve_logs::alerts::set_active_character(self.active_character.as_deref());
 
         // Per-preview chrome flip in Previews mode. Collect keys first
         // to avoid mutable / immutable borrow tangles.

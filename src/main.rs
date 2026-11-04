@@ -22,6 +22,7 @@ mod window_manager;
 
 mod version_check;
 
+mod eve_logs;
 mod eve_match;
 
 #[cfg(unix)]

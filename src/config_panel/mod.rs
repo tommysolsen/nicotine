@@ -69,6 +69,7 @@ pub(super) enum Tab {
     Display,
     Characters,
     Hotkeys,
+    Alerts,
 }
 
 /// A slider whose value can also be typed into its readout. Centralizes the
@@ -258,6 +259,11 @@ pub(super) struct Panel {
     /// Mutter forbids a client positioning windows, so restack is a no-op
     /// (see `window_manager::restack_supported`). Always true on Windows.
     pub restack_supported: bool,
+    /// Auto-detected EVE Gamelogs directories, shown on the Alerts tab
+    /// so users can see what will be watched before overriding it.
+    pub detected_log_dirs: Vec<String>,
+    /// Text of the logs-dir override input.
+    pub logs_dir_buffer: String,
 }
 
 impl Panel {
@@ -290,7 +296,15 @@ impl Panel {
         #[cfg(not(target_os = "linux"))]
         let restack_supported = true;
 
+        let detected_log_dirs = crate::eve_logs::gamelog_dirs(None)
+            .into_iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        let logs_dir_buffer = config.alerts.logs_dir.clone().unwrap_or_default();
+
         Self {
+            detected_log_dirs,
+            logs_dir_buffer,
             config,
             live,
             audio,
@@ -407,6 +421,10 @@ pub(super) enum Message {
     DropRow,
     KeyEvent(iced::keyboard::Event),
     ShowPreviewsToggled(bool),
+    AlertsEnabledToggled(bool),
+    AlertFlashToggled(bool),
+    AlertKindToggled(crate::eve_logs::alerts::AlertKind, bool),
+    AlertLogsDirChanged(String),
     HideActivePreviewToggled(bool),
     ConstrainAspectToggled(bool),
     PreviewWidthChanged(u32),
@@ -561,6 +579,28 @@ fn update(panel: &mut Panel, message: Message) -> Task<Message> {
         }
         Message::KeyEvent(event) => {
             return panel.handle_capture_key(event);
+        }
+        Message::AlertsEnabledToggled(v) => {
+            panel.config.alerts.enabled = v;
+            panel.touch();
+        }
+        Message::AlertFlashToggled(v) => {
+            panel.config.alerts.flash = v;
+            panel.touch();
+        }
+        Message::AlertKindToggled(kind, v) => {
+            panel.config.alerts.set_kind_enabled(kind, v);
+            panel.touch();
+        }
+        Message::AlertLogsDirChanged(v) => {
+            let trimmed = v.trim();
+            panel.config.alerts.logs_dir = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            };
+            panel.logs_dir_buffer = v;
+            panel.touch();
         }
         Message::ShowPreviewsToggled(v) => {
             panel.config.show_previews = v;

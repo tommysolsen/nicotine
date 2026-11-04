@@ -164,6 +164,89 @@ pub struct Config {
     pub window_width: u32,
     #[serde(default = "default_window_height")]
     pub window_height: u32,
+    /// EVE gamelog alerts (`[alerts]` table). Missing table = defaults.
+    #[serde(default)]
+    pub alerts: AlertConfig,
+}
+
+/// Settings for the EVE gamelog alert feature: which events flag a
+/// client's preview, and where to find the logs.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(default)]
+pub struct AlertConfig {
+    /// Master switch for tailing EVE gamelogs.
+    pub enabled: bool,
+    /// Flash the alert color on and off (otherwise it's shown steady).
+    pub flash: bool,
+    /// Override for the EVE `logs` (or `logs/Gamelogs`) directory.
+    /// Unset = auto-detect (Documents on Windows; Proton/Wine prefixes
+    /// on Linux).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logs_dir: Option<String>,
+    pub attacked: bool,
+    pub warp_scrambled: bool,
+    pub decloaked: bool,
+    pub cargo_full: bool,
+    pub crystal_broken: bool,
+    pub asteroid_depleted: bool,
+    pub fleet_invite: bool,
+    pub convo_request: bool,
+}
+
+impl Default for AlertConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            flash: true,
+            logs_dir: None,
+            attacked: true,
+            warp_scrambled: true,
+            decloaked: true,
+            cargo_full: true,
+            crystal_broken: true,
+            asteroid_depleted: true,
+            fleet_invite: true,
+            convo_request: true,
+        }
+    }
+}
+
+impl AlertConfig {
+    pub fn kind_enabled(&self, kind: crate::eve_logs::alerts::AlertKind) -> bool {
+        *self.kind_flag(kind)
+    }
+
+    pub fn set_kind_enabled(&mut self, kind: crate::eve_logs::alerts::AlertKind, on: bool) {
+        *self.kind_flag_mut(kind) = on;
+    }
+
+    fn kind_flag(&self, kind: crate::eve_logs::alerts::AlertKind) -> &bool {
+        use crate::eve_logs::alerts::AlertKind::*;
+        match kind {
+            Attacked => &self.attacked,
+            WarpScrambled => &self.warp_scrambled,
+            Decloaked => &self.decloaked,
+            CargoFull => &self.cargo_full,
+            CrystalBroken => &self.crystal_broken,
+            AsteroidDepleted => &self.asteroid_depleted,
+            FleetInvite => &self.fleet_invite,
+            ConvoRequest => &self.convo_request,
+        }
+    }
+
+    fn kind_flag_mut(&mut self, kind: crate::eve_logs::alerts::AlertKind) -> &mut bool {
+        use crate::eve_logs::alerts::AlertKind::*;
+        match kind {
+            Attacked => &mut self.attacked,
+            WarpScrambled => &mut self.warp_scrambled,
+            Decloaked => &mut self.decloaked,
+            CargoFull => &mut self.cargo_full,
+            CrystalBroken => &mut self.crystal_broken,
+            AsteroidDepleted => &mut self.asteroid_depleted,
+            FleetInvite => &mut self.fleet_invite,
+            ConvoRequest => &mut self.convo_request,
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -397,6 +480,7 @@ impl Config {
             character_hotkeys: HashMap::new(),
             window_width: default_window_width(),
             window_height: default_window_height(),
+            alerts: AlertConfig::default(),
         }
     }
 
@@ -481,6 +565,7 @@ mod tests {
             display_mode: DisplayMode::Previews,
             positions_locked: false,
             character_hotkeys: HashMap::new(),
+            alerts: AlertConfig::default(),
         };
 
         // Height should be: 1080 - 40 = 1040
@@ -520,6 +605,7 @@ mod tests {
             display_mode: DisplayMode::Previews,
             positions_locked: false,
             character_hotkeys: HashMap::new(),
+            alerts: AlertConfig::default(),
         };
 
         assert_eq!(config.eve_height_adjusted(), 1080);
@@ -558,6 +644,7 @@ mod tests {
             display_mode: DisplayMode::Previews,
             positions_locked: false,
             character_hotkeys: HashMap::new(),
+            alerts: AlertConfig::default(),
         };
 
         let toml_str = toml::to_string(&config).unwrap();
@@ -595,5 +682,21 @@ mod tests {
             deserialized.window_height, 800,
             "window_height must survive a save/load round-trip"
         );
+    }
+
+    #[test]
+    fn alerts_table_defaults_when_missing_or_partial() {
+        let base = toml::to_string(&Config::build_default(1920, 1080)).unwrap();
+        // Strip the [alerts] table to mimic a pre-alerts config.toml.
+        let old = base.split("[alerts]").next().unwrap().to_string();
+        let cfg: Config = toml::from_str(&old).unwrap();
+        assert_eq!(cfg.alerts, AlertConfig::default());
+
+        let partial = format!("{}\n[alerts]\nattacked = false\nlogs_dir = \"/x\"\n", old);
+        let cfg: Config = toml::from_str(&partial).unwrap();
+        assert!(!cfg.alerts.attacked);
+        assert!(cfg.alerts.cargo_full);
+        assert!(cfg.alerts.enabled);
+        assert_eq!(cfg.alerts.logs_dir.as_deref(), Some("/x"));
     }
 }

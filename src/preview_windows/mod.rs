@@ -22,7 +22,8 @@ use windows::Win32::Graphics::Gdi::{
     AddFontMemResourceEx, BeginPaint, ClientToScreen, CreateFontIndirectW, CreateSolidBrush,
     DeleteObject, DrawTextW, EndPaint, FillRect, InvalidateRect, SelectObject, SetBkMode,
     SetTextColor, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DT_CENTER,
-    DT_SINGLELINE, DT_VCENTER, FW_NORMAL, HFONT, LOGFONTW, OUT_TT_PRECIS, PAINTSTRUCT, TRANSPARENT,
+    DT_END_ELLIPSIS, DT_LEFT, DT_RIGHT, DT_SINGLELINE, DT_VCENTER, FW_NORMAL, HFONT, LOGFONTW,
+    OUT_TT_PRECIS, PAINTSTRUCT, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
@@ -239,6 +240,9 @@ struct PreviewManager {
     /// InvalidateRect every 100ms otherwise produces a visible flicker
     /// and feels sluggish.
     list_last_names: Vec<String>,
+    /// Last `eve_logs::alerts::paint_token` painted. A change (alert
+    /// raised/cleared, flash phase flipped) invalidates the previews.
+    last_alert_token: (u64, u128),
 }
 
 /// Drop-guard for the list window — destroys the Win32 window and the
@@ -312,6 +316,29 @@ impl PreviewManager {
         // (rare). The hook is the primary path and updates instantly.
         let active_id = self.wm.get_active_window().unwrap_or(0);
         self.update_active(active_id);
+
+        self.refresh_alert_chrome();
+    }
+
+    /// Repaint chrome when an EVE log alert was raised/cleared or the
+    /// flash phase flipped. Gated on a token so idle ticks don't
+    /// invalidate (which flickers).
+    fn refresh_alert_chrome(&mut self) {
+        let token = crate::eve_logs::alerts::paint_token(std::time::Instant::now());
+        if token == self.last_alert_token {
+            return;
+        }
+        self.last_alert_token = token;
+        unsafe {
+            // berase=false: paint_chrome fills every chrome pixel and the
+            // rest is the DWM thumbnail, so erasing first only flickers.
+            for preview in self.previews.values() {
+                let _ = InvalidateRect(Some(preview.hwnd), None, false);
+            }
+            if let Some(list) = &self.list {
+                let _ = InvalidateRect(Some(list.hwnd), None, false);
+            }
+        }
     }
 
     fn reconcile_previews(&mut self) {
@@ -609,6 +636,17 @@ impl PreviewManager {
     /// looking like "cycle skipped a client."
     fn update_active(&mut self, active_id: u32) {
         self.state.lock().unwrap().sync_with_active(active_id);
+
+        // Focusing a client acknowledges its pending log alert. Resolve
+        // the name from the cycle state so this works in list mode too.
+        let active_name = {
+            let s = self.state.lock().unwrap();
+            s.get_windows()
+                .iter()
+                .find(|w| w.id == active_id)
+                .map(|w| w.title.clone())
+        };
+        crate::eve_logs::alerts::set_active_character(active_name.as_deref());
 
         for preview in self.previews.values_mut() {
             let now_active = preview.source_id == active_id;
@@ -999,7 +1037,15 @@ unsafe fn paint_chrome(hwnd: HWND, character_name: &str, is_active: bool) {
     let width = rect.right - rect.left;
     let height = rect.bottom - rect.top;
 
-    let chrome_color = if is_active { NICOTINE_RED } else { CHROME_DARK };
+    let alert = crate::eve_logs::alerts::get(character_name);
+    let lit_alert = alert
+        .filter(|a| crate::eve_logs::alerts::lit(a, std::time::Instant::now()))
+        .map(|a| a.kind);
+    let chrome_color = match lit_alert {
+        Some(kind) => rgb_to_colorref(kind.severity().rgb()),
+        None if is_active => NICOTINE_RED,
+        None => CHROME_DARK,
+    };
     let chrome_brush = CreateSolidBrush(chrome_color);
     let title_h = px(TITLE_HEIGHT);
     let border_w = px(BORDER_WIDTH);
@@ -1045,15 +1091,46 @@ unsafe fn paint_chrome(hwnd: HWND, character_name: &str, is_active: bool) {
     let prev_font = SelectObject(hdc, body_font.into());
     let mut text: Vec<u16> = character_name.encode_utf16().collect();
     let mut text_rect = title_strip;
-    let _ = DrawTextW(
-        hdc,
-        &mut text,
-        &mut text_rect,
-        DT_CENTER | DT_VCENTER | DT_SINGLELINE,
-    );
+    match alert {
+        // With an alert pending, the name moves left and the alert tag
+        // sits on the right so both fit.
+        Some(a) => {
+            let pad = px(8);
+            text_rect.left += pad;
+            text_rect.right -= pad;
+            let _ = DrawTextW(
+                hdc,
+                &mut text,
+                &mut text_rect,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
+            );
+            let mut tag: Vec<u16> = a.kind.label().encode_utf16().collect();
+            let mut tag_rect = title_strip;
+            tag_rect.right -= pad;
+            let _ = DrawTextW(
+                hdc,
+                &mut tag,
+                &mut tag_rect,
+                DT_RIGHT | DT_VCENTER | DT_SINGLELINE,
+            );
+        }
+        None => {
+            let _ = DrawTextW(
+                hdc,
+                &mut text,
+                &mut text_rect,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+            );
+        }
+    }
     SelectObject(hdc, prev_font);
 
     let _ = EndPaint(hwnd, &ps);
+}
+
+/// Win32 COLORREF (0x00BBGGRR) from an RGB triple.
+fn rgb_to_colorref((r, g, b): (u8, u8, u8)) -> COLORREF {
+    COLORREF((b as u32) << 16 | (g as u32) << 8 | r as u32)
 }
 
 /// Height of the list window given a current client count.
@@ -1227,15 +1304,21 @@ unsafe fn paint_list(hwnd: HWND) {
     let mut y = title_h + px(2);
     for window in &windows {
         let is_active = window.id == active_id;
-        let text = if is_active {
+        let alert = crate::eve_logs::alerts::get(&window.title);
+        let mut text = if is_active {
             format!("🚬 {}", window.title)
         } else {
             format!("     {}", window.title)
         };
-        let color = if is_active {
-            NICOTINE_RED
-        } else {
-            LIST_TEXT_BLACK
+        if let Some(a) = alert {
+            text.push_str(" · ");
+            text.push_str(a.kind.label());
+        }
+        let lit = alert.filter(|a| crate::eve_logs::alerts::lit(a, std::time::Instant::now()));
+        let color = match lit {
+            Some(a) => rgb_to_colorref(a.kind.severity().rgb()),
+            None if is_active => NICOTINE_RED,
+            None => LIST_TEXT_BLACK,
         };
         let _ = SetTextColor(hdc, color);
         let mut row_buf: Vec<u16> = text.encode_utf16().collect();
@@ -1412,6 +1495,7 @@ fn run_manager(
         list: None,
         active_id: 0,
         list_last_names: Vec::new(),
+        last_alert_token: (0, 0),
     });
     let manager_ptr = Box::into_raw(manager);
     MANAGER_PTR.store(manager_ptr as usize, Ordering::Release);

@@ -6,6 +6,7 @@
 
 use anyhow::Result;
 use std::sync::Arc;
+use std::time::Instant;
 
 use x11rb::connection::Connection;
 use x11rb::protocol::composite::{ConnectionExt as _, Redirect};
@@ -20,6 +21,8 @@ use x11rb::protocol::xproto::{
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::COPY_DEPTH_FROM_PARENT;
+
+use crate::eve_logs::alerts::{self, AlertKind};
 
 use super::render::{
     apply_scale_transform, create_text_pixmap, jetbrains_mono, pick_visual_format, thumbnail_size,
@@ -103,6 +106,19 @@ pub(super) struct OwnedPreview {
     /// KWin and slowly degraded the whole session over time (bisected — the
     /// `present_pixmap` call was the sole cause). A direct blit doesn't.
     pub(super) window_picture: u32,
+    /// Rasterized label for the currently-shown EVE log alert (e.g.
+    /// "CARGO FULL"), cached so it's only rebuilt when the alert kind
+    /// changes. Freed on Drop or when replaced.
+    pub(super) alert_label: Option<AlertLabel>,
+}
+
+/// Pre-rasterized alert tag drawn at the right end of the title strip.
+pub(super) struct AlertLabel {
+    pub(super) kind: AlertKind,
+    pub(super) pixmap: u32,
+    pub(super) picture: u32,
+    pub(super) w: u16,
+    pub(super) h: u16,
 }
 
 impl Drop for OwnedPreview {
@@ -126,6 +142,10 @@ impl Drop for OwnedPreview {
         let _ = self.conn.render_free_picture(self.window_picture);
         let _ = self.conn.render_free_picture(self.title_picture);
         let _ = self.conn.free_pixmap(self.title_pixmap);
+        if let Some(label) = self.alert_label.take() {
+            let _ = self.conn.render_free_picture(label.picture);
+            let _ = self.conn.free_pixmap(label.pixmap);
+        }
         let _ = self.conn.free_pixmap(self.src_pixmap);
         let _ = self
             .conn
@@ -367,6 +387,7 @@ impl PreviewManager {
             drag: DragState::default(),
             grabbed: false,
             window_picture,
+            alert_label: None,
         };
         self.previews.insert(title.to_string(), preview);
 
@@ -384,11 +405,12 @@ impl PreviewManager {
     /// character-name text on top of the strip.
     pub(super) fn paint_chrome(&self, preview: &OwnedPreview) -> Result<()> {
         let conn = &self.conn;
+        let lit_alert = lit_alert_for(preview);
         let chrome_color = xcolor(
-            if preview.is_active {
-                NICOTINE_RED
-            } else {
-                CHROME_DARK
+            match lit_alert {
+                Some(kind) => kind.severity().rgb(),
+                None if preview.is_active => NICOTINE_RED,
+                None => CHROME_DARK,
             },
             0xffff,
         );
@@ -443,7 +465,88 @@ impl PreviewManager {
             preview.title_text_h,
         )?;
 
+        // Alert tag, right-aligned in the title strip. Shown in both
+        // flash phases so the reason stays readable while the color
+        // blinks.
+        if let Some(label) = preview
+            .alert_label
+            .as_ref()
+            .filter(|_| alerts::get(&preview.character_name).is_some())
+        {
+            let x = preview.width as i16 - label.w as i16 - TITLE_TEXT_LEFT_PAD;
+            let y = ((TITLE_STRIP_HEIGHT as i16 - label.h as i16) / 2).max(0);
+            conn.render_composite(
+                PictOp::OVER,
+                label.picture,
+                x11rb::NONE,
+                preview.render_picture,
+                0,
+                0,
+                0,
+                0,
+                x.max(0),
+                y,
+                label.w,
+                label.h,
+            )?;
+        }
+
         Ok(())
+    }
+
+    /// Make `preview.alert_label` match the character's pending alert:
+    /// rasterize a new tag when the kind changed, free it when cleared.
+    fn sync_alert_label(&mut self, key: &str) -> Result<()> {
+        let Some(preview) = self.previews.get(key) else {
+            return Ok(());
+        };
+        let want = alerts::get(&preview.character_name).map(|a| a.kind);
+        let have = preview.alert_label.as_ref().map(|l| l.kind);
+        if want == have {
+            return Ok(());
+        }
+        let window = preview.window;
+        let new_label = match want {
+            Some(kind) => {
+                let (pixmap, picture, w, h) = create_text_pixmap(
+                    &self.conn,
+                    window,
+                    kind.label(),
+                    NICOTINE_CREAM,
+                    jetbrains_mono(),
+                    TITLE_FONT_PX,
+                    self.argb32_format,
+                )?;
+                Some(AlertLabel {
+                    kind,
+                    pixmap,
+                    picture,
+                    w,
+                    h,
+                })
+            }
+            None => None,
+        };
+        if let Some(preview) = self.previews.get_mut(key) {
+            if let Some(old) = std::mem::replace(&mut preview.alert_label, new_label) {
+                let _ = self.conn.render_free_picture(old.picture);
+                let _ = self.conn.free_pixmap(old.pixmap);
+            }
+        }
+        Ok(())
+    }
+
+    /// Mark every preview dirty when the alert store changed or the
+    /// flash phase flipped, so the next repaint pass redraws chrome.
+    pub(super) fn refresh_alert_chrome(&mut self) {
+        let token = alerts::paint_token(Instant::now());
+        if token == self.last_alert_token {
+            return;
+        }
+        self.last_alert_token = token;
+        for preview in self.previews.values_mut() {
+            preview.dirty = true;
+        }
     }
 
     /// Per-frame: composite the source picture into the thumbnail area.
@@ -533,6 +636,7 @@ impl PreviewManager {
     /// `window_picture` field doc for why).
     pub(super) fn paint_preview_now(&mut self, key: &str) -> Result<()> {
         self.refresh_source_pixmap(key)?;
+        self.sync_alert_label(key)?;
         let preview_snapshot = match self.previews.get(key) {
             Some(p) => p,
             None => return Ok(()),
@@ -561,6 +665,17 @@ impl PreviewManager {
             thumb_w,
             thumb_h,
         )?;
+        // While an alert is lit, thicken the frame by drawing a second
+        // ring just inside the thumbnail so it reads at a glance.
+        if let Some(kind) = lit_alert_for(preview) {
+            let rects = alert_inner_frame(thumb_w, thumb_h);
+            self.conn.render_fill_rectangles(
+                PictOp::SRC,
+                preview.render_picture,
+                xcolor(kind.severity().rgb(), 0xffff),
+                &rects,
+            )?;
+        }
         // Blit the finished offscreen frame straight onto the window with one
         // composite — no X Present extension (see `window_picture`).
         self.conn.render_composite(
@@ -599,4 +714,48 @@ impl PreviewManager {
         }
         Ok(())
     }
+}
+
+/// The alert kind to paint in its lit color for this preview right
+/// now, or None (no alert, or the off phase of a flash).
+fn lit_alert_for(preview: &OwnedPreview) -> Option<AlertKind> {
+    let alert = alerts::get(&preview.character_name)?;
+    alerts::lit(&alert, Instant::now()).then_some(alert.kind)
+}
+
+/// Thickness of the extra alert ring drawn inside the thumbnail.
+const ALERT_INNER_FRAME: u16 = 3;
+
+/// Four rectangles forming a ring just inside the thumbnail area (in
+/// preview-window coordinates).
+fn alert_inner_frame(thumb_w: u16, thumb_h: u16) -> [XRectangle; 4] {
+    let t = ALERT_INNER_FRAME.min(thumb_w / 2).min(thumb_h / 2);
+    let x0 = BORDER_WIDTH as i16;
+    let y0 = TITLE_STRIP_HEIGHT as i16;
+    [
+        XRectangle {
+            x: x0,
+            y: y0,
+            width: thumb_w,
+            height: t,
+        },
+        XRectangle {
+            x: x0,
+            y: y0 + (thumb_h - t) as i16,
+            width: thumb_w,
+            height: t,
+        },
+        XRectangle {
+            x: x0,
+            y: y0,
+            width: t,
+            height: thumb_h,
+        },
+        XRectangle {
+            x: x0 + (thumb_w - t) as i16,
+            y: y0,
+            width: t,
+            height: thumb_h,
+        },
+    ]
 }

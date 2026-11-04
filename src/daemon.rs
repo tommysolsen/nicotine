@@ -124,6 +124,10 @@ impl Daemon {
         // Spawn platform-specific input listeners.
         self.spawn_input_listeners();
 
+        // EVE gamelog tailer — flags previews on mining-hold-full,
+        // scrams, incoming fire, etc. Self-gates on `alerts.enabled`.
+        crate::eve_logs::spawn();
+
         // Refresh window list AND character order periodically in
         // background. Re-reading config.toml on every tick means edits
         // (via the config panel or direct file edit) are picked up
