@@ -14,6 +14,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use super::alerts::{self, AlertKind};
 use super::parser;
+use super::status::{self, CharacterLog, LastEvent, Outcome};
 use crate::config::{AlertConfig, Config};
 
 /// How often tracked files are checked for growth.
@@ -38,6 +39,21 @@ struct TrackedFile {
     /// True until the first read completes; first-read lines are
     /// filtered by timestamp.
     first_read: bool,
+    /// When a complete line was last read (for the panel's status).
+    last_line: Option<SystemTime>,
+    last_event: Option<LastEvent>,
+}
+
+impl TrackedFile {
+    fn new() -> Self {
+        Self {
+            pos: 0,
+            character: None,
+            first_read: true,
+            last_line: None,
+            last_event: None,
+        }
+    }
 }
 
 pub fn run() {
@@ -45,9 +61,12 @@ pub fn run() {
     let mut cfg = AlertConfig::default();
     let mut last_scan: Option<Instant> = None;
     let mut logged_dirs: Option<Vec<PathBuf>> = None;
+    let mut dirs: Vec<PathBuf> = Vec::new();
 
     loop {
+        let mut changed = false;
         if last_scan.is_none_or(|t| t.elapsed() >= SCAN_INTERVAL) {
+            changed = true;
             last_scan = Some(Instant::now());
             if let Ok(fresh) = Config::load() {
                 cfg = fresh.alerts;
@@ -55,7 +74,7 @@ pub fn run() {
             alerts::apply_config(&cfg);
 
             if cfg.enabled {
-                let dirs = gamelog_dirs(cfg.logs_dir.as_deref());
+                dirs = gamelog_dirs(cfg.logs_dir.as_deref());
                 if logged_dirs.as_ref() != Some(&dirs) {
                     if dirs.is_empty() {
                         println!(
@@ -73,17 +92,51 @@ pub fn run() {
             } else {
                 tracked.clear();
                 logged_dirs = None;
+                dirs.clear();
             }
         }
 
         if cfg.enabled {
             for (path, file) in tracked.iter_mut() {
+                let before = file.last_line;
                 for (character, kind) in read_new(path, file) {
-                    if cfg.kind_enabled(kind) && alerts::raise(&character, kind) {
-                        println!("EVE log alert: {} — {}", character, kind.label());
-                    }
+                    let outcome = if cfg.kind_enabled(kind) {
+                        alerts::raise_outcome(&character, kind)
+                    } else {
+                        Outcome::KindDisabled
+                    };
+                    println!(
+                        "EVE log alert: {} — {} ({})",
+                        character,
+                        kind.label(),
+                        outcome.describe()
+                    );
+                    file.last_event = Some(LastEvent {
+                        kind,
+                        at: SystemTime::now(),
+                        outcome,
+                    });
                 }
+                changed |= file.last_line != before;
             }
+        }
+
+        if changed {
+            let logs = tracked
+                .iter()
+                .map(|(path, f)| CharacterLog {
+                    character: f.character.clone(),
+                    file: path.clone(),
+                    // EVE's write time, not ours: a day-old log read at
+                    // startup shouldn't look active.
+                    last_line: fs::metadata(path)
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .or(f.last_line),
+                    last_event: f.last_event.clone(),
+                })
+                .collect();
+            status::publish(cfg.enabled, dirs.clone(), logs);
         }
 
         std::thread::sleep(READ_INTERVAL);
@@ -116,14 +169,7 @@ fn scan(dirs: &[PathBuf], tracked: &mut HashMap<PathBuf, TrackedFile>) {
             if tracked.contains_key(&path) || !is_recent(&path) {
                 continue;
             }
-            tracked.insert(
-                path,
-                TrackedFile {
-                    pos: 0,
-                    character: None,
-                    first_read: true,
-                },
-            );
+            tracked.insert(path, TrackedFile::new());
         }
     }
 }
@@ -173,6 +219,7 @@ fn read_new(path: &Path, file: &mut TrackedFile) -> Vec<(String, AlertKind)> {
     };
     let chunk = String::from_utf8_lossy(&buf[..=last_nl]);
     file.pos += (last_nl + 1) as u64;
+    file.last_line = Some(SystemTime::now());
 
     let now_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -428,11 +475,7 @@ mod tests {
         .unwrap();
         f.flush().unwrap();
 
-        let mut tf = TrackedFile {
-            pos: 0,
-            character: None,
-            first_read: true,
-        };
+        let mut tf = TrackedFile::new();
         assert!(read_new(&path, &mut tf).is_empty());
         assert_eq!(tf.character.as_deref(), Some("Miner Alt"));
 

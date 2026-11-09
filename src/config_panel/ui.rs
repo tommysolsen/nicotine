@@ -482,6 +482,10 @@ fn alerts_section(panel: &Panel) -> Element<'_, Message> {
     };
 
     col = col
+        .push(section_header("Found In Logs"))
+        .push(found_in_logs());
+
+    col = col
         .push(section_header("Log Folder"))
         .push(
             text_input("Auto-detect", &panel.logs_dir_buffer)
@@ -496,6 +500,93 @@ fn alerts_section(panel: &Panel) -> Element<'_, Message> {
         ));
 
     col.into()
+}
+
+/// Characters the log tailer has found, with their latest event — so a
+/// test (shoot an alt) can be checked here without guessing.
+fn found_in_logs() -> Element<'static, Message> {
+    let status = crate::eve_logs::status::get();
+    let note = |s: String| -> Element<'static, Message> {
+        text(s).size(CAPTION_SIZE).color(NICOTINE_BLACK).into()
+    };
+
+    if !status.running {
+        return note(
+            "The log watcher isn't running in this window's process (a separate Nicotine \
+             daemon may own it). Its console output lists what it finds."
+                .into(),
+        );
+    }
+    if !status.enabled {
+        return note("Turn on \"Watch EVE gamelogs\" above to look for characters.".into());
+    }
+    if status.dirs.is_empty() {
+        return note("No Gamelogs folder to watch. Set one under Log Folder below.".into());
+    }
+    if status.logs.is_empty() {
+        return note(
+            "No gamelogs written in the last 24 hours. Log in a character and it shows up \
+             here within a few seconds."
+                .into(),
+        );
+    }
+
+    let mut col = column![].spacing(6);
+    for log in status.logs {
+        let file = log
+            .file
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let written = log
+            .last_line
+            .map(|t| format!("written {}", ago(t)))
+            .unwrap_or_default();
+        let event = match &log.last_event {
+            Some(e) => format!(
+                "Last event: {} {} ({})",
+                e.kind.label(),
+                ago(e.at),
+                e.outcome.describe()
+            ),
+            None => "No alert events read yet".into(),
+        };
+        let name: Element<'static, Message> = match &log.character {
+            Some(c) => text(c.clone()).font(BOLD).color(NICOTINE_BLACK).into(),
+            None => text("(header not read yet)").color(NICOTINE_BLACK).into(),
+        };
+        let mut head = row![name, Space::new().width(Length::Fill)]
+            .spacing(8)
+            .align_y(Alignment::Center);
+        if let Some(c) = log.character.clone() {
+            head = head.push(
+                button(text("Test").size(CAPTION_SIZE))
+                    .padding([2, 8])
+                    .on_press(Message::TestAlert(c)),
+            );
+        }
+        col = col.push(column![head, note(format!("{file} · {written}")), note(event),].spacing(2));
+    }
+    col = col.push(note(
+        "Test flags that character's preview red. If Test works but a real event doesn't, \
+         the event wasn't recognised in the log; if the event shows here but the preview \
+         stays plain, the preview's window title doesn't match the character name."
+            .into(),
+    ));
+    col.into()
+}
+
+fn ago(t: std::time::SystemTime) -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(t)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    match secs {
+        0..=4 => "just now".into(),
+        5..=59 => format!("{secs}s ago"),
+        60..=3599 => format!("{}m ago", secs / 60),
+        _ => format!("{}h ago", secs / 3600),
+    }
 }
 
 fn previews_section(panel: &Panel) -> Element<'_, Message> {

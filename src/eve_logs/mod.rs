@@ -8,6 +8,7 @@
 
 pub mod alerts;
 mod parser;
+pub mod status;
 mod tailer;
 
 pub use tailer::gamelog_dirs;

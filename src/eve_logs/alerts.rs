@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Instant;
 
+use super::status::Outcome;
 use crate::config::AlertConfig;
 
 /// How loud an alert is. Drives the chrome color and whether a newer
@@ -147,18 +148,24 @@ fn store() -> MutexGuard<'static, Store> {
 /// Record an alert for `character`. Ignored when that character is the
 /// focused client, or when a more severe alert is already pending.
 /// Returns true if the store changed.
-pub fn raise(character: &str, kind: AlertKind) -> bool {
+#[cfg(test)]
+fn raise(character: &str, kind: AlertKind) -> bool {
+    raise_outcome(character, kind) == Outcome::Shown
+}
+
+/// Like `raise`, but says why nothing changed.
+pub fn raise_outcome(character: &str, kind: AlertKind) -> Outcome {
     let mut s = store();
     if s.active_character.as_deref() == Some(character) {
-        return false;
+        return Outcome::Focused;
     }
     if let Some(existing) = s.alerts.get(character) {
         if existing.kind.severity() > kind.severity() {
-            return false;
+            return Outcome::AlreadyFlagged;
         }
         if existing.kind == kind {
             // Already showing exactly this — don't restart the flash.
-            return false;
+            return Outcome::AlreadyFlagged;
         }
     }
     s.alerts.insert(
@@ -169,7 +176,20 @@ pub fn raise(character: &str, kind: AlertKind) -> bool {
         },
     );
     s.generation += 1;
-    true
+    Outcome::Shown
+}
+
+/// Flag `character` regardless of focus, for the panel's test button.
+pub fn raise_test(character: &str, kind: AlertKind) {
+    let mut s = store();
+    s.alerts.insert(
+        character.to_string(),
+        ActiveAlert {
+            kind,
+            since: Instant::now(),
+        },
+    );
+    s.generation += 1;
 }
 
 /// Tell the store which character is focused (None = no EVE client).

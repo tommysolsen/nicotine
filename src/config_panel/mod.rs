@@ -425,6 +425,10 @@ pub(super) enum Message {
     AlertFlashToggled(bool),
     AlertKindToggled(crate::eve_logs::alerts::AlertKind, bool),
     AlertLogsDirChanged(String),
+    /// Re-render the Alerts tab's "found in logs" list.
+    LogStatusTick,
+    /// Flag this character's preview as if attacked.
+    TestAlert(String),
     HideActivePreviewToggled(bool),
     ConstrainAspectToggled(bool),
     PreviewWidthChanged(u32),
@@ -601,6 +605,12 @@ fn update(panel: &mut Panel, message: Message) -> Task<Message> {
             };
             panel.logs_dir_buffer = v;
             panel.touch();
+        }
+        Message::LogStatusTick => {}
+        Message::TestAlert(character) => {
+            use crate::eve_logs::alerts::{self, AlertKind};
+            alerts::raise_test(&character, AlertKind::Attacked);
+            crate::eve_logs::status::record_test(&character, AlertKind::Attacked);
         }
         Message::ShowPreviewsToggled(v) => {
             panel.config.show_previews = v;
@@ -809,6 +819,10 @@ fn subscription(panel: &Panel) -> Subscription<Message> {
     // appears once it lands (iced only redraws on events, unlike egui).
     if panel.version_polls < 20 && crate::version_check::get_update_status().is_none() {
         subs.push(iced::time::every(Duration::from_millis(700)).map(|_| Message::VersionPoll));
+    }
+    // Keep the Alerts tab's list of characters found in logs current.
+    if panel.active_tab == Tab::Alerts {
+        subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::LogStatusTick));
     }
     // Persist panel window resizes. Always subscribed, but only fires on an
     // actual resize; the handler no-ops unless the size really changed.
