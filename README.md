@@ -188,7 +188,7 @@ Previews and the list window:
 
 ### EVE Log Alerts
 
-Nicotine tails the EVE gamelogs (`Documents/EVE/logs/Gamelogs`) and flags a client when something happens to it while you're looking at another one. The preview's title strip and border flash in the alert's colour with a short label; on Linux a frame is also drawn inside the thumbnail, and in List mode the row is marked. Focusing the client clears its alert.
+Nicotine tails the EVE gamelogs (`Documents/EVE/logs/Gamelogs`) and flags a client when something happens to it, including the client you're on (you may hear it before you see it). The preview's title strip and border flash in the alert's colour with a short label; on Linux a frame is also drawn inside the thumbnail, and in List mode the row is marked. Switching to or away from the client clears its alert.
 
 | Alert | Label | Colour |
 |-------|-------|--------|

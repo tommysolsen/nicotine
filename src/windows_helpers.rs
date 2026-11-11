@@ -23,7 +23,7 @@ pub enum CycleDirection {
     Backward,
 }
 
-/// The three keyboard modifiers Win32 RegisterHotKey accepts as a
+/// The keyboard modifiers Win32 RegisterHotKey accepts as a
 /// global hotkey qualifier. `None` is represented by `Option<ModifierKind>::None`
 /// at the use site, not a fourth variant — matches the existing
 /// `Option<u16> modifier_key` shape in `Config`.
@@ -32,6 +32,8 @@ pub enum ModifierKind {
     Shift,
     Ctrl,
     Alt,
+    /// Either Windows key.
+    Win,
 }
 
 /// Map a Win32 VK code to the modifier it represents, or None if the
@@ -49,6 +51,8 @@ pub fn modifier_kind(vk: u16) -> Option<ModifierKind> {
         0x10 | 0xA0 | 0xA1 => Some(ModifierKind::Shift),
         0x11 | 0xA2 | 0xA3 => Some(ModifierKind::Ctrl),
         0x12 | 0xA4 | 0xA5 => Some(ModifierKind::Alt),
+        // VK_LWIN = 0x5B, VK_RWIN = 0x5C (no unified code).
+        0x5B | 0x5C => Some(ModifierKind::Win),
         _ => None,
     }
 }
@@ -200,6 +204,8 @@ mod tests {
         assert_eq!(modifier_kind(0xA3), Some(ModifierKind::Ctrl));
         assert_eq!(modifier_kind(0xA4), Some(ModifierKind::Alt));
         assert_eq!(modifier_kind(0xA5), Some(ModifierKind::Alt));
+        assert_eq!(modifier_kind(0x5B), Some(ModifierKind::Win));
+        assert_eq!(modifier_kind(0x5C), Some(ModifierKind::Win));
     }
 
     #[test]

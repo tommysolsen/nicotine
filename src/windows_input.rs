@@ -14,7 +14,7 @@ use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_SHIFT,
+    RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, PostThreadMessageW, SetWindowsHookExW, HHOOK, MSG, MSLLHOOKSTRUCT,
@@ -182,6 +182,7 @@ fn modifier_to_winapi(kind: Option<ModifierKind>) -> HOT_KEY_MODIFIERS {
         Some(ModifierKind::Shift) => MOD_SHIFT,
         Some(ModifierKind::Ctrl) => MOD_CONTROL,
         Some(ModifierKind::Alt) => MOD_ALT,
+        Some(ModifierKind::Win) => MOD_WIN,
         None => HOT_KEY_MODIFIERS(0),
     }
 }

@@ -457,7 +457,7 @@ fn alerts_section(panel: &Panel) -> Element<'_, Message> {
             .on_toggle(Message::AlertFlashToggled),
         caption(
             "A client's preview turns red (danger), amber (needs action) or blue (info) with \
-             the reason in its title bar. Switching to that client clears it."
+             the reason in its title bar, also for the client you are on. Switching to or away from that client clears it."
         ),
         section_header("Events"),
     ]

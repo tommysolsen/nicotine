@@ -121,8 +121,11 @@ pub struct ActiveAlert {
 struct Store {
     alerts: HashMap<String, ActiveAlert>,
     /// Character of the currently-focused EVE client, as reported by
-    /// the preview manager. Its alerts are cleared and new ones are
-    /// dropped — you're already looking at that client.
+    /// the preview manager. Switching clients clears the alerts of both
+    /// the client left and the one arrived at; an alert raised on the
+    /// focused client stays until you switch away (you may hear it
+    /// without seeing it, e.g. behind another window, and look at the
+    /// previews).
     active_character: Option<String>,
     /// Bumped on every change so renderers can cheaply tell whether a
     /// repaint is needed.
@@ -145,9 +148,9 @@ fn store() -> MutexGuard<'static, Store> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
-/// Record an alert for `character`. Ignored when that character is the
-/// focused client, or when a more severe alert is already pending.
-/// Returns true if the store changed.
+/// Record an alert for `character`, focused or not. Ignored when the
+/// same or a more severe alert is already pending. Returns true if the
+/// store changed.
 #[cfg(test)]
 fn raise(character: &str, kind: AlertKind) -> bool {
     raise_outcome(character, kind) == Outcome::Shown
@@ -156,9 +159,6 @@ fn raise(character: &str, kind: AlertKind) -> bool {
 /// Like `raise`, but says why nothing changed.
 pub fn raise_outcome(character: &str, kind: AlertKind) -> Outcome {
     let mut s = store();
-    if s.active_character.as_deref() == Some(character) {
-        return Outcome::Focused;
-    }
     if let Some(existing) = s.alerts.get(character) {
         if existing.kind.severity() > kind.severity() {
             return Outcome::AlreadyFlagged;
@@ -179,7 +179,7 @@ pub fn raise_outcome(character: &str, kind: AlertKind) -> Outcome {
     Outcome::Shown
 }
 
-/// Flag `character` regardless of focus, for the panel's test button.
+/// Flag `character` even over a pending alert, for the panel's test button.
 pub fn raise_test(character: &str, kind: AlertKind) {
     let mut s = store();
     s.alerts.insert(
@@ -193,16 +193,20 @@ pub fn raise_test(character: &str, kind: AlertKind) {
 }
 
 /// Tell the store which character is focused (None = no EVE client).
-/// Clears that character's pending alert.
+/// On a change, clears the pending alerts of both the character left
+/// and the one now focused. Repeating the current focus is a no-op.
 pub fn set_active_character(character: Option<&str>) {
     let mut s = store();
-    if s.active_character.as_deref() != character {
-        s.active_character = character.map(str::to_string);
+    if s.active_character.as_deref() == character {
+        return;
     }
-    if let Some(c) = character {
-        if s.alerts.remove(c).is_some() {
-            s.generation += 1;
-        }
+    let left = std::mem::replace(&mut s.active_character, character.map(str::to_string));
+    let mut cleared = false;
+    for c in [left.as_deref(), character].into_iter().flatten() {
+        cleared |= s.alerts.remove(c).is_some();
+    }
+    if cleared {
+        s.generation += 1;
     }
 }
 
@@ -295,13 +299,21 @@ mod tests {
         // Same kind again doesn't restart it.
         assert!(!raise("store-test-a", AlertKind::CargoFull));
 
-        // Focusing the client clears its alert and suppresses new ones.
+        // Focusing the client clears its alert...
         set_active_character(Some("store-test-a"));
         assert!(get("store-test-a").is_none());
-        assert!(!raise("store-test-a", AlertKind::Attacked));
+        // ...but a new one on the focused client still shows, and
+        // re-reporting the same focus doesn't clear it.
+        assert!(raise("store-test-a", AlertKind::Attacked));
+        set_active_character(Some("store-test-a"));
+        assert!(get("store-test-a").is_some());
 
-        // Other characters are unaffected.
+        // Other characters are unaffected by focus changes elsewhere.
         assert!(raise("store-test-b", AlertKind::Attacked));
+        // Leaving a client clears its alert too.
+        set_active_character(Some("store-test-c"));
+        assert!(get("store-test-a").is_none());
+        assert!(get("store-test-b").is_some());
         set_active_character(None);
         assert!(get("store-test-b").is_some());
     }

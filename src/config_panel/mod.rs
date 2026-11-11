@@ -200,6 +200,10 @@ pub(super) const MODIFIER_CHOICES: &[ModifierChoice] = &[
         code: Some(0x12),
         label: "Alt",
     },
+    ModifierChoice {
+        code: Some(0x5B),
+        label: "Win",
+    }, // VK_LWIN (either Windows key works: RegisterHotKey's MOD_WIN)
 ];
 
 #[cfg(unix)]
@@ -220,6 +224,10 @@ pub(super) const MODIFIER_CHOICES: &[ModifierChoice] = &[
         code: Some(56),
         label: "Alt",
     }, // KEY_LEFTALT
+    ModifierChoice {
+        code: Some(125),
+        label: "Super",
+    }, // KEY_LEFTMETA (the Windows key)
 ];
 
 pub(super) struct Panel {
@@ -1069,6 +1077,7 @@ const OEM_VK_RANGE: &[u16] = &[
 #[cfg(windows)]
 pub(super) fn code_to_label(vk: u16) -> String {
     match vk {
+        0x5B | 0x5C => "Win".into(),
         0x70 => "F1".into(),
         0x71 => "F2".into(),
         0x72 => "F3".into(),
@@ -1119,6 +1128,7 @@ pub(super) fn code_to_label(vk: u16) -> String {
 #[cfg(unix)]
 pub(super) fn code_to_label(code: u16) -> String {
     match code {
+        125 | 126 => "Super".into(),
         59 => "F1".into(),
         60 => "F2".into(),
         61 => "F3".into(),

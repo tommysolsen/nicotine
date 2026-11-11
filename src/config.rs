@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 /// A single per-character hotkey binding. `vk` is a Win32 Virtual-Key
 /// code (or evdev code on Linux); `modifier` is an optional second VK
-/// that must be held down (typically Shift/Ctrl/Alt).
+/// that must be held down (typically Shift/Ctrl/Alt/Win).
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct CharacterHotkey {
     pub vk: u16,
@@ -132,7 +132,7 @@ pub struct Config {
     /// tab just like the cycle keys.
     #[serde(default)]
     pub toggle_previews_key: Option<u16>,
-    /// Optional modifier (Shift/Ctrl/Alt, as a platform key code) that
+    /// Optional modifier (Shift/Ctrl/Alt/Win, as a platform key code) that
     /// must be held with `toggle_previews_key` for the toggle to fire.
     /// `None` = no modifier (the bare key toggles).
     #[serde(default)]

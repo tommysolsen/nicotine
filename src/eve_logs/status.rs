@@ -18,9 +18,6 @@ use super::alerts::AlertKind;
 pub enum Outcome {
     /// The preview was flagged.
     Shown,
-    /// That character's client was focused, so no flag (you're looking
-    /// at it already).
-    Focused,
     /// The event's checkbox is off.
     KindDisabled,
     /// The same alert, or a more severe one, is already showing.
@@ -33,7 +30,6 @@ impl Outcome {
     pub fn describe(self) -> &'static str {
         match self {
             Outcome::Shown => "preview flagged",
-            Outcome::Focused => "not flagged: that client was focused",
             Outcome::KindDisabled => "not flagged: event turned off",
             Outcome::AlreadyFlagged => "already flagged",
             Outcome::Test => "test alert",
